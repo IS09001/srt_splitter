@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>話者別SRT分離ツール</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap');
+
+:root{
+  --bg:#1a1d23;
+  --panel:#22262e;
+  --panel2:#2b303a;
+  --line:#373d49;
+  --line2:#454c5a;
+  --ink:#e8eaed;
+  --ink2:#9aa3b0;
+  --ink3:#646c7a;
+  --go:#5eb88a;       /* 成功・実行 */
+  --go-deep:#3f9b6e;
+  --sp1:#6ba3d6;      /* 話者1 */
+  --sp2:#d69a5e;      /* 話者2 */
+  --warn:#d66a5e;
+  --radius:12px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{
+  background:var(--bg);
+  color:var(--ink);
+  font-family:'Zen Kaku Gothic New',sans-serif;
+  font-size:14px;line-height:1.6;
+  min-height:100vh;
+  padding:32px 20px 80px;
+}
+.wrap{max-width:620px;margin:0 auto}
+
+/* header */
+.head{margin-bottom:28px}
+.kicker{
+  font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:2px;
+  color:var(--ink3);text-transform:uppercase;margin-bottom:8px;
+}
+h1{font-size:23px;font-weight:700;letter-spacing:-0.3px;margin-bottom:6px}
+h1 .s1{color:var(--sp1)}
+h1 .s2{color:var(--sp2)}
+.lead{color:var(--ink2);font-size:13px}
+
+/* dropzone */
+.drop{
+  border:1.5px dashed var(--line2);
+  border-radius:var(--radius);
+  background:var(--panel);
+  padding:38px 24px;text-align:center;
+  cursor:pointer;transition:all .18s;
+  margin-bottom:18px;
+}
+.drop:hover{border-color:var(--go);background:var(--panel2)}
+.drop.drag{border-color:var(--go);background:var(--panel2);transform:scale(1.005)}
+.drop.loaded{border-style:solid;border-color:var(--go-deep)}
+.drop-ico{font-size:30px;margin-bottom:10px;opacity:.85}
+.drop-main{font-size:15px;font-weight:500;margin-bottom:4px}
+.drop-sub{font-size:12px;color:var(--ink3);font-family:'JetBrains Mono',monospace}
+.drop-file{color:var(--go);font-weight:500}
+
+/* settings */
+.panel{
+  background:var(--panel);border:1px solid var(--line);
+  border-radius:var(--radius);padding:18px 18px;margin-bottom:14px;
+}
+.panel-label{
+  font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:1.5px;
+  color:var(--ink3);text-transform:uppercase;margin-bottom:14px;
+}
+.row{display:flex;align-items:center;justify-content:space-between;gap:16px}
+.row-text{flex:1;min-width:0}
+.row-title{font-size:14px;font-weight:500;margin-bottom:2px}
+.row-help{font-size:12px;color:var(--ink3)}
+.stepper{display:flex;align-items:center;gap:0;flex-shrink:0}
+.stepper button{
+  width:36px;height:38px;border:1px solid var(--line2);background:var(--panel2);
+  color:var(--ink);font-size:18px;cursor:pointer;transition:all .15s;
+  display:flex;align-items:center;justify-content:center;
+}
+.stepper button:hover{background:var(--line);border-color:var(--go)}
+.stepper button:active{transform:scale(.94)}
+.stepper button:first-child{border-radius:9px 0 0 9px}
+.stepper button:last-child{border-radius:0 9px 9px 0}
+.stepper input{
+  width:58px;height:38px;border:1px solid var(--line2);border-left:none;border-right:none;
+  background:var(--bg);color:var(--ink);text-align:center;
+  font-family:'JetBrains Mono',monospace;font-size:16px;font-weight:600;
+  outline:none;-moz-appearance:textfield;
+}
+.stepper input::-webkit-outer-spin-button,
+.stepper input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+.unit{font-size:12px;color:var(--ink3);margin-left:10px;flex-shrink:0;
+  font-family:'JetBrains Mono',monospace}
+
+/* run */
+.run{
+  width:100%;border:none;border-radius:var(--radius);
+  background:var(--go);color:#11281c;
+  font-family:'Zen Kaku Gothic New',sans-serif;font-size:15px;font-weight:700;
+  padding:15px;cursor:pointer;transition:all .15s;letter-spacing:.5px;
+}
+.run:hover:not(:disabled){background:var(--go-deep);color:#fff}
+.run:active:not(:disabled){transform:scale(.99)}
+.run:disabled{background:var(--panel2);color:var(--ink3);cursor:not-allowed}
+
+/* result */
+.result{margin-top:18px;display:none}
+.result.show{display:block;animation:fade .25s ease}
+@keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.result-head{
+  font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:1.5px;
+  color:var(--ink3);text-transform:uppercase;margin-bottom:12px;
+}
+.spk-card{
+  display:flex;align-items:center;gap:14px;
+  background:var(--panel);border:1px solid var(--line);
+  border-left-width:3px;border-radius:10px;
+  padding:13px 16px;margin-bottom:9px;
+}
+.spk-card.s1{border-left-color:var(--sp1)}
+.spk-card.s2{border-left-color:var(--sp2)}
+.spk-card.sx{border-left-color:var(--ink3)}
+.spk-info{flex:1;min-width:0}
+.spk-name{font-size:14px;font-weight:500}
+.spk-stat{font-size:12px;color:var(--ink3);font-family:'JetBrains Mono',monospace;margin-top:1px}
+.dl{
+  border:1px solid var(--line2);border-radius:8px;background:var(--panel2);
+  color:var(--ink);font-family:'Zen Kaku Gothic New',sans-serif;font-size:13px;font-weight:500;
+  padding:8px 16px;cursor:pointer;transition:all .15s;white-space:nowrap;
+}
+.dl:hover{background:var(--go);color:#11281c;border-color:var(--go)}
+.dl:active{transform:scale(.96)}
+.dl.done{background:var(--go-deep);color:#fff;border-color:var(--go-deep)}
+
+/* error */
+.err{
+  background:rgba(214,106,94,.1);border:1px solid var(--warn);
+  border-radius:10px;padding:12px 15px;margin-top:14px;
+  color:#e8a99f;font-size:13px;display:none;
+}
+.err.show{display:block}
+
+.foot{
+  margin-top:26px;padding-top:18px;border-top:1px solid var(--line);
+  font-size:12px;color:var(--ink3);line-height:1.7;
+}
+.foot code{font-family:'JetBrains Mono',monospace;color:var(--ink2);
+  background:var(--panel);padding:1px 6px;border-radius:4px;font-size:11px}
+.foot b{color:var(--ink2);font-weight:600}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="head">
+    <div class="kicker">Premiere transcript → SRT</div>
+    <h1><span class="s1">話者</span>別<span class="s2">SRT</span>分離ツール</h1>
+    <p class="lead">文字起こしJSONを話者ごとのSRTに分けて書き出します。文末と読点・助詞を優先して指定文字数で改行します。</p>
+  </div>
+
+  <div class="drop" id="drop">
+    <input type="file" id="file" accept=".json,application/json" hidden>
+    <div class="drop-ico">⬇</div>
+    <div class="drop-main" id="dropMain">JSONをドラッグ、またはクリックして選択</div>
+    <div class="drop-sub" id="dropSub">Premiereの文字起こし書き出し（JSON形式）</div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-label">改行設定</div>
+    <div class="row">
+      <div class="row-text">
+        <div class="row-title">1キャプションの最大文字数</div>
+        <div class="row-help">画面表示の要件に合わせて指定（既定16）</div>
+      </div>
+      <div class="stepper">
+        <button id="minus" aria-label="減らす">−</button>
+        <input type="number" id="chars" value="16" min="4" max="60">
+        <button id="plus" aria-label="増やす">＋</button>
+      </div>
+      <span class="unit">字</span>
+    </div>
+  </div>
+
+  <button class="run" id="run" disabled>SRTを書き出す</button>
+
+  <div class="err" id="err"></div>
+
+  <div class="result" id="result">
+    <div class="result-head">書き出し結果</div>
+    <div id="cards"></div>
+  </div>
+
+  <div class="foot">
+    <b>使い方</b>　Premiereで静的文字起こしを実行し、<code>…</code>メニューから<b>JSON形式で書き出し</b>。そのファイルをここに通すと話者ごとのSRTができます。<br>
+    Premiere側では、各SRTを<b>ソースモニター経由</b>でタイムスタンプ基準に配置し、トラックごとに保存済みのトラックスタイルを当てます。文字や尺の修正はPremiere上で。
+  </div>
+
+</div>
+
+<script>
+// ===== 分割ロジック（Pythonスクリプトの移植）=====
+const MIN_DUR = 1.0;
+const BREAK_SUFFIXES = ['、','。','は','が','を','に','で','と','も','ので','から','けど','とか','たり','ては','には','では'];
+const BREAK_EXACT = new Set(['ね','よ','ます','です','ので','から','けど']);
+
+function endsWithAny(t, arr){ return arr.some(s => t.endsWith(s)); }
+
+function goodBreaks(words){
+  const pos = new Set();
+  words.forEach((w,i)=>{
+    const t = w.text;
+    if(t.endsWith('、')||t.endsWith('。')||BREAK_EXACT.has(t)||endsWithAny(t,BREAK_SUFFIXES)) pos.add(i);
+  });
+  return pos;
+}
+
+function fmtTs(sec){
+  if(sec<0) sec=0;
+  let h=Math.floor(sec/3600);
+  let m=Math.floor((sec%3600)/60);
+  let s=Math.floor(sec%60);
+  let ms=Math.round((sec-Math.floor(sec))*1000);
+  if(ms===1000){ms=0;s++;if(s===60){s=0;m++;if(m===60){m=0;h++;}}}
+  const p=(n,l=2)=>String(n).padStart(l,'0');
+  return `${p(h)}:${p(m)}:${p(s)},${p(ms,3)}`;
+}
+
+function chunkSmart(words, maxChars){
+  const breaks = goodBreaks(words);
+  const chunks = [];
+  const n = words.length;
+  let i = 0;
+  while(i < n){
+    let acc=0, j=i, lastBreak=-1;
+    while(j < n){
+      const wlen = words[j].text.length;
+      if(acc+wlen > maxChars && acc>0) break;
+      acc += wlen;
+      if(breaks.has(j)) lastBreak = j;
+      j++;
+    }
+    let end;
+    if(lastBreak>=i && lastBreak<j-1) end=lastBreak;
+    else end=j-1;
+    const sw = words.slice(i, end+1);
+    const tx = sw.map(w=>w.text).join('');
+    const st = sw[0].start;
+    const en = sw[sw.length-1].start + (sw[sw.length-1].duration||0);
+    chunks.push([st,en,tx]);
+    i = end+1;
+  }
+  return chunks;
+}
+
+function splitSeg(seg, maxChars){
+  const words = seg.words;
+  const sentences = [];
+  let cur = [];
+  words.forEach(w=>{
+    cur.push(w);
+    if(w.eos){ sentences.push(cur); cur=[]; }
+  });
+  if(cur.length) sentences.push(cur);
+  const res = [];
+  sentences.forEach(sw=>{
+    const t = sw.map(w=>w.text).join('');
+    if(t.length <= maxChars){
+      res.push([sw[0].start, sw[sw.length-1].start+(sw[sw.length-1].duration||0), t]);
+    } else {
+      chunkSmart(sw, maxChars).forEach(c=>res.push(c));
+    }
+  });
+  return res;
+}
+
+function buildSrt(segments, speakerId, maxChars){
+  let entries = [];
+  segments.forEach(seg=>{
+    if(seg.speaker !== speakerId) return;
+    splitSeg(seg, maxChars).forEach(([st,en,tx])=>{
+      if(en-st < MIN_DUR) en = st+MIN_DUR;
+      entries.push([st,en,tx]);
+    });
+  });
+  entries.sort((a,b)=>a[0]-b[0]);
+  for(let i=0;i<entries.length-1;i++){
+    const nxt = entries[i+1][0];
+    if(entries[i][1] > nxt){
+      entries[i][1] = Math.max(entries[i][0]+0.3, nxt-0.001);
+    }
+  }
+  const lines = [];
+  entries.forEach(([st,en,tx],idx)=>{
+    lines.push(String(idx+1));
+    lines.push(`${fmtTs(st)} --> ${fmtTs(en)}`);
+    lines.push(tx);
+    lines.push('');
+  });
+  return { text: lines.join('\r\n'), count: entries.length };
+}
+
+// ===== UI =====
+let loadedData = null;
+let loadedName = '';
+const $ = id => document.getElementById(id);
+const drop=$('drop'), fileInput=$('file'), runBtn=$('run');
+const charsInput=$('chars'), errBox=$('err'), result=$('result'), cards=$('cards');
+
+drop.addEventListener('click', ()=>fileInput.click());
+drop.addEventListener('dragover', e=>{e.preventDefault();drop.classList.add('drag')});
+drop.addEventListener('dragleave', ()=>drop.classList.remove('drag'));
+drop.addEventListener('drop', e=>{
+  e.preventDefault();drop.classList.remove('drag');
+  if(e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', e=>{
+  if(e.target.files.length) handleFile(e.target.files[0]);
+});
+
+function showErr(msg){
+  errBox.textContent = msg;
+  errBox.classList.add('show');
+}
+function clearErr(){ errBox.classList.remove('show'); }
+
+function handleFile(file){
+  clearErr();
+  result.classList.remove('show');
+  const reader = new FileReader();
+  reader.onload = ev=>{
+    try{
+      const data = JSON.parse(ev.target.result);
+      if(!data.segments || !data.speakers){
+        showErr('このJSONには segments / speakers が見つかりません。Premiereの文字起こしをJSON形式で書き出したファイルか確認してください。');
+        loadedData=null; runBtn.disabled=true; return;
+      }
+      loadedData = data;
+      loadedName = file.name.replace(/\.json$/i,'');
+      drop.classList.add('loaded');
+      $('dropMain').innerHTML = `読込済み：<span class="drop-file">${file.name}</span>`;
+      const segN = data.segments.length;
+      const spkN = data.speakers.length;
+      $('dropSub').textContent = `${spkN}名の話者 ・ ${segN}セグメント`;
+      runBtn.disabled = false;
+    }catch(err){
+      showErr('JSONとして読み込めませんでした。ファイル形式を確認してください。');
+      loadedData=null; runBtn.disabled=true;
+    }
+  };
+  reader.readAsText(file);
+}
+
+// stepper
+$('minus').addEventListener('click', ()=>{
+  charsInput.value = Math.max(4, (parseInt(charsInput.value)||16)-1);
+});
+$('plus').addEventListener('click', ()=>{
+  charsInput.value = Math.min(60, (parseInt(charsInput.value)||16)+1);
+});
+
+function downloadSrt(filename, text){
+  // UTF-8 BOM付き
+  const bom = '\uFEFF';
+  const blob = new Blob([bom+text], {type:'text/plain;charset=utf-8'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click();
+  document.body.removeChild(a);
+  setTimeout(()=>URL.revokeObjectURL(url), 1000);
+}
+
+runBtn.addEventListener('click', ()=>{
+  if(!loadedData) return;
+  clearErr();
+  const maxChars = Math.min(60, Math.max(4, parseInt(charsInput.value)||16));
+  charsInput.value = maxChars;
+
+  const results = loadedData.speakers.map((sp, idx)=>{
+    const name = sp.name.replace(/[\s　]/g,'');
+    const { text, count } = buildSrt(loadedData.segments, sp.id, maxChars);
+    return { name, text, count, idx };
+  });
+
+  cards.innerHTML = '';
+  results.forEach(r=>{
+    const cls = r.idx===0 ? 's1' : (r.idx===1 ? 's2' : 'sx');
+    const filename = `${loadedName}_${r.name}.srt`;
+    const card = document.createElement('div');
+    card.className = `spk-card ${cls}`;
+    card.innerHTML = `
+      <div class="spk-info">
+        <div class="spk-name">${r.name}</div>
+        <div class="spk-stat">${r.count} captions ・ max ${maxChars}字</div>
+      </div>
+      <button class="dl">ダウンロード</button>`;
+    const btn = card.querySelector('.dl');
+    btn.addEventListener('click', ()=>{
+      downloadSrt(filename, r.text);
+      btn.textContent = '保存しました ✓';
+      btn.classList.add('done');
+    });
+    cards.appendChild(card);
+  });
+
+  result.classList.add('show');
+});
+</script>
+</body>
+</html>
