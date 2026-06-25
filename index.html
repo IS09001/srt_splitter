@@ -173,8 +173,8 @@ h1 .s2{color:var(--sp2)}
     <div class="panel-label">改行設定</div>
     <div class="row">
       <div class="row-text">
-        <div class="row-title">1キャプションの最大文字数</div>
-        <div class="row-help">画面表示の要件に合わせて指定（既定16）</div>
+        <div class="row-title">1行あたりの文字数</div>
+        <div class="row-help">画面に収まる1行の最大文字数（既定16）</div>
       </div>
       <div class="stepper">
         <button id="minus" aria-label="減らす">−</button>
@@ -182,6 +182,18 @@ h1 .s2{color:var(--sp2)}
         <button id="plus" aria-label="増やす">＋</button>
       </div>
       <span class="unit">字</span>
+    </div>
+    <div class="row" style="margin-top:14px;">
+      <div class="row-text">
+        <div class="row-title">最大行数</div>
+        <div class="row-help">1キャプションの行数の上限（既定2・短い発話は1行）</div>
+      </div>
+      <div class="stepper">
+        <button id="lminus" aria-label="減らす">−</button>
+        <input type="number" id="lines" value="2" min="1" max="4">
+        <button id="lplus" aria-label="増やす">＋</button>
+      </div>
+      <span class="unit">行</span>
     </div>
   </div>
 
@@ -202,19 +214,17 @@ h1 .s2{color:var(--sp2)}
 </div>
 
 <script>
-// ===== 分割ロジック（Pythonスクリプトの移植）=====
+// ===== 分割ロジック（2行対応・Pythonと同一）=====
 const MIN_DUR = 1.0;
 const BREAK_SUFFIXES = ['、','。','は','が','を','に','で','と','も','ので','から','けど','とか','たり','ては','には','では'];
 const BREAK_EXACT = new Set(['ね','よ','ます','です','ので','から','けど']);
 
-function endsWithAny(t, arr){ return arr.some(s => t.endsWith(s)); }
-
+function isBreakWord(t){
+  return t.endsWith('、')||t.endsWith('。')||BREAK_EXACT.has(t)||BREAK_SUFFIXES.some(s=>t.endsWith(s));
+}
 function goodBreaks(words){
   const pos = new Set();
-  words.forEach((w,i)=>{
-    const t = w.text;
-    if(t.endsWith('、')||t.endsWith('。')||BREAK_EXACT.has(t)||endsWithAny(t,BREAK_SUFFIXES)) pos.add(i);
-  });
+  words.forEach((w,i)=>{ if(isBreakWord(w.text)) pos.add(i); });
   return pos;
 }
 
@@ -229,16 +239,18 @@ function fmtTs(sec){
   return `${p(h)}:${p(m)}:${p(s)},${p(ms,3)}`;
 }
 
-function chunkSmart(words, maxChars){
+// 単語列を、各行 charsPerLine 以内・最大 maxLines 行に折る
+// 返り値 { lines:[str], used:int }
+function wrapIntoLines(words, charsPerLine, maxLines){
   const breaks = goodBreaks(words);
-  const chunks = [];
-  const n = words.length;
+  const lines = [];
   let i = 0;
-  while(i < n){
+  const n = words.length;
+  while(i < n && lines.length < maxLines){
     let acc=0, j=i, lastBreak=-1;
     while(j < n){
       const wlen = words[j].text.length;
-      if(acc+wlen > maxChars && acc>0) break;
+      if(acc+wlen > charsPerLine && acc>0) break;
       acc += wlen;
       if(breaks.has(j)) lastBreak = j;
       j++;
@@ -246,44 +258,42 @@ function chunkSmart(words, maxChars){
     let end;
     if(lastBreak>=i && lastBreak<j-1) end=lastBreak;
     else end=j-1;
-    const sw = words.slice(i, end+1);
-    const tx = sw.map(w=>w.text).join('');
-    const st = sw[0].start;
-    const en = sw[sw.length-1].start + (sw[sw.length-1].duration||0);
-    chunks.push([st,en,tx]);
+    lines.push(words.slice(i,end+1).map(w=>w.text).join(''));
     i = end+1;
   }
-  return chunks;
+  return { lines, used: i };
 }
 
-function splitSeg(seg, maxChars){
+// セグメント → [ [start,end,lines[]], ... ]
+function splitSegment(seg, charsPerLine, maxLines){
   const words = seg.words;
   const sentences = [];
   let cur = [];
-  words.forEach(w=>{
-    cur.push(w);
-    if(w.eos){ sentences.push(cur); cur=[]; }
-  });
+  words.forEach(w=>{ cur.push(w); if(w.eos){ sentences.push(cur); cur=[]; } });
   if(cur.length) sentences.push(cur);
-  const res = [];
-  sentences.forEach(sw=>{
-    const t = sw.map(w=>w.text).join('');
-    if(t.length <= maxChars){
-      res.push([sw[0].start, sw[sw.length-1].start+(sw[sw.length-1].duration||0), t]);
-    } else {
-      chunkSmart(sw, maxChars).forEach(c=>res.push(c));
+
+  const caps = [];
+  sentences.forEach(sentWords=>{
+    let remaining = sentWords;
+    while(remaining.length){
+      const { lines, used } = wrapIntoLines(remaining, charsPerLine, maxLines);
+      const capWords = remaining.slice(0, used);
+      const st = capWords[0].start;
+      const en = capWords[capWords.length-1].start + (capWords[capWords.length-1].duration||0);
+      caps.push([st, en, lines]);
+      remaining = remaining.slice(used);
     }
   });
-  return res;
+  return caps;
 }
 
-function buildSrt(segments, speakerId, maxChars){
+function buildSrt(segments, speakerId, charsPerLine, maxLines){
   let entries = [];
   segments.forEach(seg=>{
     if(seg.speaker !== speakerId) return;
-    splitSeg(seg, maxChars).forEach(([st,en,tx])=>{
+    splitSegment(seg, charsPerLine, maxLines).forEach(([st,en,lines])=>{
       if(en-st < MIN_DUR) en = st+MIN_DUR;
-      entries.push([st,en,tx]);
+      entries.push([st,en,lines]);
     });
   });
   entries.sort((a,b)=>a[0]-b[0]);
@@ -293,14 +303,14 @@ function buildSrt(segments, speakerId, maxChars){
       entries[i][1] = Math.max(entries[i][0]+0.3, nxt-0.001);
     }
   }
-  const lines = [];
-  entries.forEach(([st,en,tx],idx)=>{
-    lines.push(String(idx+1));
-    lines.push(`${fmtTs(st)} --> ${fmtTs(en)}`);
-    lines.push(tx);
-    lines.push('');
+  const out = [];
+  entries.forEach(([st,en,lines],idx)=>{
+    out.push(String(idx+1));
+    out.push(`${fmtTs(st)} --> ${fmtTs(en)}`);
+    lines.forEach(ln=>out.push(ln));
+    out.push('');
   });
-  return { text: lines.join('\r\n'), count: entries.length };
+  return { text: out.join('\r\n'), count: entries.length };
 }
 
 // ===== UI =====
@@ -308,7 +318,7 @@ let loadedData = null;
 let loadedName = '';
 const $ = id => document.getElementById(id);
 const drop=$('drop'), fileInput=$('file'), runBtn=$('run');
-const charsInput=$('chars'), errBox=$('err'), result=$('result'), cards=$('cards');
+const charsInput=$('chars'), linesInput=$('lines'), errBox=$('err'), result=$('result'), cards=$('cards');
 
 drop.addEventListener('click', ()=>fileInput.click());
 drop.addEventListener('dragover', e=>{e.preventDefault();drop.classList.add('drag')});
@@ -361,6 +371,12 @@ $('minus').addEventListener('click', ()=>{
 $('plus').addEventListener('click', ()=>{
   charsInput.value = Math.min(60, (parseInt(charsInput.value)||16)+1);
 });
+$('lminus').addEventListener('click', ()=>{
+  linesInput.value = Math.max(1, (parseInt(linesInput.value)||2)-1);
+});
+$('lplus').addEventListener('click', ()=>{
+  linesInput.value = Math.min(4, (parseInt(linesInput.value)||2)+1);
+});
 
 function downloadSrt(filename, text){
   // UTF-8 BOM付き
@@ -378,11 +394,13 @@ runBtn.addEventListener('click', ()=>{
   if(!loadedData) return;
   clearErr();
   const maxChars = Math.min(60, Math.max(4, parseInt(charsInput.value)||16));
+  const maxLines = Math.min(4, Math.max(1, parseInt(linesInput.value)||2));
   charsInput.value = maxChars;
+  linesInput.value = maxLines;
 
   const results = loadedData.speakers.map((sp, idx)=>{
     const name = sp.name.replace(/[\s　]/g,'');
-    const { text, count } = buildSrt(loadedData.segments, sp.id, maxChars);
+    const { text, count } = buildSrt(loadedData.segments, sp.id, maxChars, maxLines);
     return { name, text, count, idx };
   });
 
@@ -395,7 +413,7 @@ runBtn.addEventListener('click', ()=>{
     card.innerHTML = `
       <div class="spk-info">
         <div class="spk-name">${r.name}</div>
-        <div class="spk-stat">${r.count} captions ・ max ${maxChars}字</div>
+        <div class="spk-stat">${r.count} captions ・ ${maxChars}字×最大${maxLines}行</div>
       </div>
       <button class="dl">ダウンロード</button>`;
     const btn = card.querySelector('.dl');
