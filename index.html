@@ -96,6 +96,20 @@ h1 .s2{color:var(--sp2)}
 .unit{font-size:12px;color:var(--ink3);margin-left:10px;flex-shrink:0;
   font-family:'JetBrains Mono',monospace}
 
+/* toggle */
+.toggle{flex-shrink:0;cursor:pointer;display:inline-flex}
+.toggle input{display:none}
+.toggle .track{
+  width:48px;height:28px;border-radius:14px;background:var(--line2);
+  position:relative;transition:background .18s;display:block;
+}
+.toggle .knob{
+  position:absolute;top:3px;left:3px;width:22px;height:22px;border-radius:50%;
+  background:var(--ink2);transition:all .18s;
+}
+.toggle input:checked + .track{background:var(--go-deep)}
+.toggle input:checked + .track .knob{left:23px;background:#fff}
+
 /* run */
 .run{
   width:100%;border:none;border-radius:var(--radius);
@@ -195,6 +209,16 @@ h1 .s2{color:var(--sp2)}
       </div>
       <span class="unit">行</span>
     </div>
+    <div class="row" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--line);">
+      <div class="row-text">
+        <div class="row-title">句読点を除去</div>
+        <div class="row-help">テロップ用に「、。」を削除して詰める（既定オン）</div>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="strip" checked>
+        <span class="track"><span class="knob"></span></span>
+      </label>
+    </div>
   </div>
 
   <button class="run" id="run" disabled>SRTを書き出す</button>
@@ -287,7 +311,7 @@ function splitSegment(seg, charsPerLine, maxLines){
   return caps;
 }
 
-function buildSrt(segments, speakerId, charsPerLine, maxLines){
+function buildSrt(segments, speakerId, charsPerLine, maxLines, stripPunct){
   let entries = [];
   segments.forEach(seg=>{
     if(seg.speaker !== speakerId) return;
@@ -307,7 +331,11 @@ function buildSrt(segments, speakerId, charsPerLine, maxLines){
   entries.forEach(([st,en,lines],idx)=>{
     out.push(String(idx+1));
     out.push(`${fmtTs(st)} --> ${fmtTs(en)}`);
-    lines.forEach(ln=>out.push(ln));
+    // 句読点除去（分割確定後の最終段。分割位置の判定には影響しない）
+    lines.forEach(ln=>{
+      if(stripPunct) ln = ln.replace(/[、。]/g, '');
+      out.push(ln);
+    });
     out.push('');
   });
   return { text: out.join('\r\n'), count: entries.length };
@@ -395,12 +423,13 @@ runBtn.addEventListener('click', ()=>{
   clearErr();
   const maxChars = Math.min(60, Math.max(4, parseInt(charsInput.value)||16));
   const maxLines = Math.min(4, Math.max(1, parseInt(linesInput.value)||2));
+  const stripPunct = $('strip').checked;
   charsInput.value = maxChars;
   linesInput.value = maxLines;
 
   const results = loadedData.speakers.map((sp, idx)=>{
     const name = sp.name.replace(/[\s　]/g,'');
-    const { text, count } = buildSrt(loadedData.segments, sp.id, maxChars, maxLines);
+    const { text, count } = buildSrt(loadedData.segments, sp.id, maxChars, maxLines, stripPunct);
     return { name, text, count, idx };
   });
 
