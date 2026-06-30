@@ -243,13 +243,8 @@ const MIN_DUR = 1.0;
 const BREAK_SUFFIXES = ['、','。','は','が','を','に','で','と','も','ので','から','けど','とか','たり','ては','には','では'];
 const BREAK_EXACT = new Set(['ね','よ','ます','です','ので','から','けど']);
 
-function isBreakWord(t){
-  return t.endsWith('、')||t.endsWith('。')||BREAK_EXACT.has(t)||BREAK_SUFFIXES.some(s=>t.endsWith(s));
-}
-function goodBreaks(words){
-  const pos = new Set();
-  words.forEach((w,i)=>{ if(isBreakWord(w.text)) pos.add(i); });
-  return pos;
+function isParticleBreak(t){
+  return BREAK_EXACT.has(t) || BREAK_SUFFIXES.some(s=>t.endsWith(s));
 }
 
 function fmtTs(sec){
@@ -263,20 +258,31 @@ function fmtTs(sec){
   return `${p(h)}:${p(m)}:${p(s)},${p(ms,3)}`;
 }
 
-// 単語列を、各行 charsPerLine 以内・最大 maxLines 行に折る
-// 返り値 { lines:[str], used:int }
-function wrapIntoLines(words, charsPerLine, maxLines){
-  const breaks = goodBreaks(words);
+// 読点・句点でフレーズに分割（読点句点はフレーズ末尾に含む。最優先境界）
+function splitIntoPhrases(words){
+  const phrases = [];
+  let cur = [];
+  words.forEach(w=>{
+    cur.push(w);
+    const t = w.text;
+    if(t.endsWith('、') || t.endsWith('。')){ phrases.push(cur); cur=[]; }
+  });
+  if(cur.length) phrases.push(cur);
+  return phrases;
+}
+
+// 長いフレーズを助詞優先→字数で割る
+function splitLongPhrase(words, charsPerLine){
   const lines = [];
   let i = 0;
   const n = words.length;
-  while(i < n && lines.length < maxLines){
+  while(i < n){
     let acc=0, j=i, lastBreak=-1;
     while(j < n){
       const wlen = words[j].text.length;
       if(acc+wlen > charsPerLine && acc>0) break;
       acc += wlen;
-      if(breaks.has(j)) lastBreak = j;
+      if(isParticleBreak(words[j].text)) lastBreak = j;
       j++;
     }
     let end;
@@ -285,29 +291,54 @@ function wrapIntoLines(words, charsPerLine, maxLines){
     lines.push(words.slice(i,end+1).map(w=>w.text).join(''));
     i = end+1;
   }
-  return { lines, used: i };
+  return lines;
 }
 
-// セグメント → [ [start,end,lines[]], ... ]
+function phraseToLines(words, charsPerLine){
+  const text = words.map(w=>w.text).join('');
+  if(text.length <= charsPerLine) return [text];
+  return splitLongPhrase(words, charsPerLine);
+}
+
+// セグメント → [[start,end,lines[]], ...]　優先: 読点句点 > 助詞 > 字数
 function splitSegment(seg, charsPerLine, maxLines){
   const words = seg.words;
-  const sentences = [];
-  let cur = [];
-  words.forEach(w=>{ cur.push(w); if(w.eos){ sentences.push(cur); cur=[]; } });
-  if(cur.length) sentences.push(cur);
+  const phrases = splitIntoPhrases(words);
 
-  const caps = [];
-  sentences.forEach(sentWords=>{
-    let remaining = sentWords;
-    while(remaining.length){
-      const { lines, used } = wrapIntoLines(remaining, charsPerLine, maxLines);
-      const capWords = remaining.slice(0, used);
-      const st = capWords[0].start;
-      const en = capWords[capWords.length-1].start + (capWords[capWords.length-1].duration||0);
-      caps.push([st, en, lines]);
-      remaining = remaining.slice(used);
-    }
+  // フレーズを行に変換し、各行にタイミングを付与
+  const phraseLines = []; // [ [lineText, st, en] ]
+  phrases.forEach(ph=>{
+    const sub = phraseToLines(ph, charsPerLine);
+    let idx = 0;
+    sub.forEach(lineText=>{
+      const consumed = [];
+      let acc = '';
+      while(idx < ph.length && acc.length < lineText.length){
+        acc += ph[idx].text;
+        consumed.push(ph[idx]);
+        idx++;
+      }
+      const st = consumed[0].start;
+      const en = consumed[consumed.length-1].start + (consumed[consumed.length-1].duration||0);
+      phraseLines.push([lineText, st, en]);
+    });
   });
+
+  // 短い行を max_lines までまとめてキャプション化
+  const caps = [];
+  let i = 0;
+  const n = phraseLines.length;
+  while(i < n){
+    const capLines = [];
+    let st = phraseLines[i][1];
+    let en = phraseLines[i][2];
+    while(i < n && capLines.length < maxLines){
+      capLines.push(phraseLines[i][0]);
+      en = phraseLines[i][2];
+      i++;
+    }
+    caps.push([st, en, capLines]);
+  }
   return caps;
 }
 
