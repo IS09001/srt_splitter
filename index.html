@@ -258,14 +258,21 @@ function fmtTs(sec){
   return `${p(h)}:${p(m)}:${p(s)},${p(ms,3)}`;
 }
 
-// 読点・句点でフレーズに分割（読点句点はフレーズ末尾に含む。最優先境界）
+const GAP_THRESHOLD = 1.0; // 単語間がこの秒数以上空いたら最優先で区切る
+
+// フレーズ分割。優先境界: (1)時間の空白 (2)読点・句点
 function splitIntoPhrases(words){
   const phrases = [];
   let cur = [];
-  words.forEach(w=>{
+  words.forEach((w, idx)=>{
     cur.push(w);
     const t = w.text;
-    if(t.endsWith('、') || t.endsWith('。')){ phrases.push(cur); cur=[]; }
+    let gapBreak = false;
+    if(idx+1 < words.length){
+      const wEnd = w.start + (w.duration||0);
+      if(words[idx+1].start - wEnd >= GAP_THRESHOLD) gapBreak = true;
+    }
+    if(gapBreak || t.endsWith('、') || t.endsWith('。')){ phrases.push(cur); cur=[]; }
   });
   if(cur.length) phrases.push(cur);
   return phrases;
@@ -325,6 +332,7 @@ function splitSegment(seg, charsPerLine, maxLines){
   });
 
   // 短い行を max_lines までまとめてキャプション化
+  // ただし行間に GAP_THRESHOLD 以上の時間差があれば同じキャプションにまとめない
   const caps = [];
   let i = 0;
   const n = phraseLines.length;
@@ -333,8 +341,10 @@ function splitSegment(seg, charsPerLine, maxLines){
     let st = phraseLines[i][1];
     let en = phraseLines[i][2];
     while(i < n && capLines.length < maxLines){
-      capLines.push(phraseLines[i][0]);
-      en = phraseLines[i][2];
+      const [lt, lst, len_] = phraseLines[i];
+      if(capLines.length && (lst - en) >= GAP_THRESHOLD) break;
+      capLines.push(lt);
+      en = len_;
       i++;
     }
     caps.push([st, en, capLines]);
