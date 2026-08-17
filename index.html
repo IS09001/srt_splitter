@@ -309,7 +309,9 @@ function phraseToLines(words, charsPerLine){
 
 // セグメント → [[start,end,lines[]], ...]　優先: 読点句点 > 助詞 > 字数
 function splitSegment(seg, charsPerLine, maxLines){
-  const words = seg.words;
+  // 空テキスト単語（disfluency等）は除外。字幕に載らず、文字数対応も壊すため
+  const words = seg.words.filter(w => w.text && w.text.length > 0);
+  if(!words.length) return [];
   const phrases = splitIntoPhrases(words);
 
   // フレーズを行に変換し、各行にタイミングを付与
@@ -352,10 +354,12 @@ function splitSegment(seg, charsPerLine, maxLines){
   return caps;
 }
 
-function buildSrt(segments, speakerId, charsPerLine, maxLines, stripPunct){
+function buildSrt(segments, speakerIds, charsPerLine, maxLines, stripPunct){
+  // speakerIds: 同名話者のID集合（Premiereが同一人物を複数IDに分裂させるケースを吸収）
+  const idSet = speakerIds instanceof Set ? speakerIds : new Set([speakerIds]);
   let entries = [];
   segments.forEach(seg=>{
-    if(seg.speaker !== speakerId) return;
+    if(!idSet.has(seg.speaker)) return;
     splitSegment(seg, charsPerLine, maxLines).forEach(([st,en,lines])=>{
       if(en-st < MIN_DUR) en = st+MIN_DUR;
       entries.push([st,en,lines]);
@@ -422,7 +426,7 @@ function handleFile(file){
       drop.classList.add('loaded');
       $('dropMain').innerHTML = `読込済み：<span class="drop-file">${file.name}</span>`;
       const segN = data.segments.length;
-      const spkN = data.speakers.length;
+      const spkN = new Set(data.speakers.map(s=>s.name.replace(/[\s　]/g,''))).size;
       $('dropSub').textContent = `${spkN}名の話者 ・ ${segN}セグメント`;
       runBtn.disabled = false;
     }catch(err){
@@ -468,10 +472,18 @@ runBtn.addEventListener('click', ()=>{
   charsInput.value = maxChars;
   linesInput.value = maxLines;
 
-  const results = loadedData.speakers.map((sp, idx)=>{
+  // 同名話者をグルーピング（Premiereの検出が同一人物を複数IDに分裂させるケースを統合）
+  const groups = []; // [{name, ids:Set}]
+  loadedData.speakers.forEach(sp=>{
     const name = sp.name.replace(/[\s　]/g,'');
-    const { text, count } = buildSrt(loadedData.segments, sp.id, maxChars, maxLines, stripPunct);
-    return { name, text, count, idx };
+    let g = groups.find(x=>x.name===name);
+    if(!g){ g = { name, ids: new Set() }; groups.push(g); }
+    g.ids.add(sp.id);
+  });
+
+  const results = groups.map((g, idx)=>{
+    const { text, count } = buildSrt(loadedData.segments, g.ids, maxChars, maxLines, stripPunct);
+    return { name: g.name, text, count, idx };
   });
 
   cards.innerHTML = '';
