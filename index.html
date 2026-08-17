@@ -151,7 +151,7 @@ h1 .s2{color:var(--sp2)}
 .dl.done{background:var(--go-deep);color:#fff;border-color:var(--go-deep)}
 
 /* error */
-.err{
+.err{white-space:pre-wrap;
   background:rgba(214,106,94,.1);border:1px solid var(--warn);
   border-radius:10px;padding:12px 15px;margin-top:14px;
   color:#e8a99f;font-size:13px;display:none;
@@ -428,6 +428,28 @@ function handleFile(file){
       const segN = data.segments.length;
       const spkN = new Set(data.speakers.map(s=>s.name.replace(/[\s　]/g,''))).size;
       $('dropSub').textContent = `${spkN}名の話者 ・ ${segN}セグメント`;
+
+      // カバレッジ検品: 文字起こしに大きな空白がないか（不完全なJSON書き出しの検知）
+      const GAP_WARN_SEC = 30;
+      const spans = [];
+      data.segments.forEach(seg=>{
+        const ws = (seg.words||[]).filter(w=>w.text && w.text.length>0);
+        if(!ws.length) return;
+        const lw = ws[ws.length-1];
+        spans.push([seg.start, lw.start + (lw.duration||0)]);
+      });
+      spans.sort((a,b)=>a[0]-b[0]);
+      const gaps = [];
+      for(let k=0;k<spans.length-1;k++){
+        const g = spans[k+1][0] - spans[k][1];
+        if(g >= GAP_WARN_SEC){
+          const f = s=>{const m=Math.floor(s/60), ss=Math.floor(s%60); return `${String(m).padStart(2,'0')}:${String(ss).padStart(2,'0')}`;};
+          gaps.push(`${f(spans[k][1])}〜${f(spans[k+1][0])} (${Math.round(g)}秒)`);
+        }
+      }
+      if(gaps.length){
+        showErr(`注意: 文字起こしに${GAP_WARN_SEC}秒以上の空白が${gaps.length}箇所あります。Premiereのパネルでこの時間帯に文字があるなら、JSON書き出しが不完全な可能性があります（再書き出しを推奨）。\n` + gaps.join(' / '));
+      }
       runBtn.disabled = false;
     }catch(err){
       showErr('JSONとして読み込めませんでした。ファイル形式を確認してください。');
