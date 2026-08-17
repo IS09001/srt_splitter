@@ -96,6 +96,20 @@ h1 .s2{color:var(--sp2)}
 .unit{font-size:12px;color:var(--ink3);margin-left:10px;flex-shrink:0;
   font-family:'JetBrains Mono',monospace}
 
+/* toggle */
+.toggle{flex-shrink:0;cursor:pointer;display:inline-flex}
+.toggle input{display:none}
+.toggle .track{
+  width:48px;height:28px;border-radius:14px;background:var(--line2);
+  position:relative;transition:background .18s;display:block;
+}
+.toggle .knob{
+  position:absolute;top:3px;left:3px;width:22px;height:22px;border-radius:50%;
+  background:var(--ink2);transition:all .18s;
+}
+.toggle input:checked + .track{background:var(--go-deep)}
+.toggle input:checked + .track .knob{left:23px;background:#fff}
+
 /* run */
 .run{
   width:100%;border:none;border-radius:var(--radius);
@@ -173,8 +187,8 @@ h1 .s2{color:var(--sp2)}
     <div class="panel-label">改行設定</div>
     <div class="row">
       <div class="row-text">
-        <div class="row-title">1キャプションの最大文字数</div>
-        <div class="row-help">画面表示の要件に合わせて指定（既定16）</div>
+        <div class="row-title">1行あたりの文字数</div>
+        <div class="row-help">画面に収まる1行の最大文字数（既定16）</div>
       </div>
       <div class="stepper">
         <button id="minus" aria-label="減らす">−</button>
@@ -182,6 +196,28 @@ h1 .s2{color:var(--sp2)}
         <button id="plus" aria-label="増やす">＋</button>
       </div>
       <span class="unit">字</span>
+    </div>
+    <div class="row" style="margin-top:14px;">
+      <div class="row-text">
+        <div class="row-title">最大行数</div>
+        <div class="row-help">1キャプションの行数の上限（既定2・短い発話は1行）</div>
+      </div>
+      <div class="stepper">
+        <button id="lminus" aria-label="減らす">−</button>
+        <input type="number" id="lines" value="2" min="1" max="4">
+        <button id="lplus" aria-label="増やす">＋</button>
+      </div>
+      <span class="unit">行</span>
+    </div>
+    <div class="row" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--line);">
+      <div class="row-text">
+        <div class="row-title">句読点を除去</div>
+        <div class="row-help">テロップ用に「、。」を削除して詰める（既定オン）</div>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="strip" checked>
+        <span class="track"><span class="knob"></span></span>
+      </label>
     </div>
   </div>
 
@@ -202,20 +238,13 @@ h1 .s2{color:var(--sp2)}
 </div>
 
 <script>
-// ===== 分割ロジック（Pythonスクリプトの移植）=====
+// ===== 分割ロジック（2行対応・Pythonと同一）=====
 const MIN_DUR = 1.0;
 const BREAK_SUFFIXES = ['、','。','は','が','を','に','で','と','も','ので','から','けど','とか','たり','ては','には','では'];
 const BREAK_EXACT = new Set(['ね','よ','ます','です','ので','から','けど']);
 
-function endsWithAny(t, arr){ return arr.some(s => t.endsWith(s)); }
-
-function goodBreaks(words){
-  const pos = new Set();
-  words.forEach((w,i)=>{
-    const t = w.text;
-    if(t.endsWith('、')||t.endsWith('。')||BREAK_EXACT.has(t)||endsWithAny(t,BREAK_SUFFIXES)) pos.add(i);
-  });
-  return pos;
+function isParticleBreak(t){
+  return BREAK_EXACT.has(t) || BREAK_SUFFIXES.some(s=>t.endsWith(s));
 }
 
 function fmtTs(sec){
@@ -229,61 +258,111 @@ function fmtTs(sec){
   return `${p(h)}:${p(m)}:${p(s)},${p(ms,3)}`;
 }
 
-function chunkSmart(words, maxChars){
-  const breaks = goodBreaks(words);
-  const chunks = [];
-  const n = words.length;
+const GAP_THRESHOLD = 1.0; // 単語間がこの秒数以上空いたら最優先で区切る
+
+// フレーズ分割。優先境界: (1)時間の空白 (2)読点・句点
+function splitIntoPhrases(words){
+  const phrases = [];
+  let cur = [];
+  words.forEach((w, idx)=>{
+    cur.push(w);
+    const t = w.text;
+    let gapBreak = false;
+    if(idx+1 < words.length){
+      const wEnd = w.start + (w.duration||0);
+      if(words[idx+1].start - wEnd >= GAP_THRESHOLD) gapBreak = true;
+    }
+    if(gapBreak || t.endsWith('、') || t.endsWith('。')){ phrases.push(cur); cur=[]; }
+  });
+  if(cur.length) phrases.push(cur);
+  return phrases;
+}
+
+// 長いフレーズを助詞優先→字数で割る
+function splitLongPhrase(words, charsPerLine){
+  const lines = [];
   let i = 0;
+  const n = words.length;
   while(i < n){
     let acc=0, j=i, lastBreak=-1;
     while(j < n){
       const wlen = words[j].text.length;
-      if(acc+wlen > maxChars && acc>0) break;
+      if(acc+wlen > charsPerLine && acc>0) break;
       acc += wlen;
-      if(breaks.has(j)) lastBreak = j;
+      if(isParticleBreak(words[j].text)) lastBreak = j;
       j++;
     }
     let end;
     if(lastBreak>=i && lastBreak<j-1) end=lastBreak;
     else end=j-1;
-    const sw = words.slice(i, end+1);
-    const tx = sw.map(w=>w.text).join('');
-    const st = sw[0].start;
-    const en = sw[sw.length-1].start + (sw[sw.length-1].duration||0);
-    chunks.push([st,en,tx]);
+    lines.push(words.slice(i,end+1).map(w=>w.text).join(''));
     i = end+1;
   }
-  return chunks;
+  return lines;
 }
 
-function splitSeg(seg, maxChars){
-  const words = seg.words;
-  const sentences = [];
-  let cur = [];
-  words.forEach(w=>{
-    cur.push(w);
-    if(w.eos){ sentences.push(cur); cur=[]; }
+function phraseToLines(words, charsPerLine){
+  const text = words.map(w=>w.text).join('');
+  if(text.length <= charsPerLine) return [text];
+  return splitLongPhrase(words, charsPerLine);
+}
+
+// セグメント → [[start,end,lines[]], ...]　優先: 読点句点 > 助詞 > 字数
+function splitSegment(seg, charsPerLine, maxLines){
+  // 空テキスト単語（disfluency等）は除外。字幕に載らず、文字数対応も壊すため
+  const words = seg.words.filter(w => w.text && w.text.length > 0);
+  if(!words.length) return [];
+  const phrases = splitIntoPhrases(words);
+
+  // フレーズを行に変換し、各行にタイミングを付与
+  const phraseLines = []; // [ [lineText, st, en] ]
+  phrases.forEach(ph=>{
+    const sub = phraseToLines(ph, charsPerLine);
+    let idx = 0;
+    sub.forEach(lineText=>{
+      const consumed = [];
+      let acc = '';
+      while(idx < ph.length && acc.length < lineText.length){
+        acc += ph[idx].text;
+        consumed.push(ph[idx]);
+        idx++;
+      }
+      const st = consumed[0].start;
+      const en = consumed[consumed.length-1].start + (consumed[consumed.length-1].duration||0);
+      phraseLines.push([lineText, st, en]);
+    });
   });
-  if(cur.length) sentences.push(cur);
-  const res = [];
-  sentences.forEach(sw=>{
-    const t = sw.map(w=>w.text).join('');
-    if(t.length <= maxChars){
-      res.push([sw[0].start, sw[sw.length-1].start+(sw[sw.length-1].duration||0), t]);
-    } else {
-      chunkSmart(sw, maxChars).forEach(c=>res.push(c));
+
+  // 短い行を max_lines までまとめてキャプション化
+  // ただし行間に GAP_THRESHOLD 以上の時間差があれば同じキャプションにまとめない
+  const caps = [];
+  let i = 0;
+  const n = phraseLines.length;
+  while(i < n){
+    const capLines = [];
+    let st = phraseLines[i][1];
+    let en = phraseLines[i][2];
+    while(i < n && capLines.length < maxLines){
+      const [lt, lst, len_] = phraseLines[i];
+      if(capLines.length && (lst - en) >= GAP_THRESHOLD) break;
+      capLines.push(lt);
+      en = len_;
+      i++;
     }
-  });
-  return res;
+    caps.push([st, en, capLines]);
+  }
+  return caps;
 }
 
-function buildSrt(segments, speakerId, maxChars){
+function buildSrt(segments, speakerIds, charsPerLine, maxLines, stripPunct){
+  // speakerIds: 同名話者のID集合（Premiereが同一人物を複数IDに分裂させるケースを吸収）
+  const idSet = speakerIds instanceof Set ? speakerIds : new Set([speakerIds]);
   let entries = [];
   segments.forEach(seg=>{
-    if(seg.speaker !== speakerId) return;
-    splitSeg(seg, maxChars).forEach(([st,en,tx])=>{
+    if(!idSet.has(seg.speaker)) return;
+    splitSegment(seg, charsPerLine, maxLines).forEach(([st,en,lines])=>{
       if(en-st < MIN_DUR) en = st+MIN_DUR;
-      entries.push([st,en,tx]);
+      entries.push([st,en,lines]);
     });
   });
   entries.sort((a,b)=>a[0]-b[0]);
@@ -293,14 +372,18 @@ function buildSrt(segments, speakerId, maxChars){
       entries[i][1] = Math.max(entries[i][0]+0.3, nxt-0.001);
     }
   }
-  const lines = [];
-  entries.forEach(([st,en,tx],idx)=>{
-    lines.push(String(idx+1));
-    lines.push(`${fmtTs(st)} --> ${fmtTs(en)}`);
-    lines.push(tx);
-    lines.push('');
+  const out = [];
+  entries.forEach(([st,en,lines],idx)=>{
+    out.push(String(idx+1));
+    out.push(`${fmtTs(st)} --> ${fmtTs(en)}`);
+    // 句読点除去（分割確定後の最終段。分割位置の判定には影響しない）
+    lines.forEach(ln=>{
+      if(stripPunct) ln = ln.replace(/[、。]/g, '');
+      out.push(ln);
+    });
+    out.push('');
   });
-  return { text: lines.join('\r\n'), count: entries.length };
+  return { text: out.join('\r\n'), count: entries.length };
 }
 
 // ===== UI =====
@@ -308,7 +391,7 @@ let loadedData = null;
 let loadedName = '';
 const $ = id => document.getElementById(id);
 const drop=$('drop'), fileInput=$('file'), runBtn=$('run');
-const charsInput=$('chars'), errBox=$('err'), result=$('result'), cards=$('cards');
+const charsInput=$('chars'), linesInput=$('lines'), errBox=$('err'), result=$('result'), cards=$('cards');
 
 drop.addEventListener('click', ()=>fileInput.click());
 drop.addEventListener('dragover', e=>{e.preventDefault();drop.classList.add('drag')});
@@ -343,7 +426,7 @@ function handleFile(file){
       drop.classList.add('loaded');
       $('dropMain').innerHTML = `読込済み：<span class="drop-file">${file.name}</span>`;
       const segN = data.segments.length;
-      const spkN = data.speakers.length;
+      const spkN = new Set(data.speakers.map(s=>s.name.replace(/[\s　]/g,''))).size;
       $('dropSub').textContent = `${spkN}名の話者 ・ ${segN}セグメント`;
       runBtn.disabled = false;
     }catch(err){
@@ -360,6 +443,12 @@ $('minus').addEventListener('click', ()=>{
 });
 $('plus').addEventListener('click', ()=>{
   charsInput.value = Math.min(60, (parseInt(charsInput.value)||16)+1);
+});
+$('lminus').addEventListener('click', ()=>{
+  linesInput.value = Math.max(1, (parseInt(linesInput.value)||2)-1);
+});
+$('lplus').addEventListener('click', ()=>{
+  linesInput.value = Math.min(4, (parseInt(linesInput.value)||2)+1);
 });
 
 function downloadSrt(filename, text){
@@ -378,12 +467,23 @@ runBtn.addEventListener('click', ()=>{
   if(!loadedData) return;
   clearErr();
   const maxChars = Math.min(60, Math.max(4, parseInt(charsInput.value)||16));
+  const maxLines = Math.min(4, Math.max(1, parseInt(linesInput.value)||2));
+  const stripPunct = $('strip').checked;
   charsInput.value = maxChars;
+  linesInput.value = maxLines;
 
-  const results = loadedData.speakers.map((sp, idx)=>{
+  // 同名話者をグルーピング（Premiereの検出が同一人物を複数IDに分裂させるケースを統合）
+  const groups = []; // [{name, ids:Set}]
+  loadedData.speakers.forEach(sp=>{
     const name = sp.name.replace(/[\s　]/g,'');
-    const { text, count } = buildSrt(loadedData.segments, sp.id, maxChars);
-    return { name, text, count, idx };
+    let g = groups.find(x=>x.name===name);
+    if(!g){ g = { name, ids: new Set() }; groups.push(g); }
+    g.ids.add(sp.id);
+  });
+
+  const results = groups.map((g, idx)=>{
+    const { text, count } = buildSrt(loadedData.segments, g.ids, maxChars, maxLines, stripPunct);
+    return { name: g.name, text, count, idx };
   });
 
   cards.innerHTML = '';
@@ -395,7 +495,7 @@ runBtn.addEventListener('click', ()=>{
     card.innerHTML = `
       <div class="spk-info">
         <div class="spk-name">${r.name}</div>
-        <div class="spk-stat">${r.count} captions ・ max ${maxChars}字</div>
+        <div class="spk-stat">${r.count} captions ・ ${maxChars}字×最大${maxLines}行</div>
       </div>
       <button class="dl">ダウンロード</button>`;
     const btn = card.querySelector('.dl');
